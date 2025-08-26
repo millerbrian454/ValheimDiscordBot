@@ -9,13 +9,15 @@ namespace ValheimDiscordBot.Services
         private readonly DiscordSocketClient _client;
         private readonly ILogger<DiscordBotService> _logger;
         private readonly DiscordConfiguration _config;
+        private readonly ValheimServerService _valheimServerService;
         private IMessageChannel? _targetChannel;
         private bool _isReady = false;
 
-        public DiscordBotService(ILogger<DiscordBotService> logger, DiscordConfiguration config)
+        public DiscordBotService(ILogger<DiscordBotService> logger, DiscordConfiguration config, ValheimServerService valheimServerService)
         {
             _logger = logger;
             _config = config;
+            _valheimServerService = valheimServerService;
 
             var clientConfig = new DiscordSocketConfig
             {
@@ -127,17 +129,14 @@ namespace ValheimDiscordBot.Services
 
         private async Task MessageReceivedAsync(SocketMessage message)
         {
-            // Don't respond to system messages, bots, or webhooks
             if (message.Author.IsBot || message.Author.IsWebhook || message is not SocketUserMessage userMessage)
                 return;
 
-            // Check if automated responses are enabled
             if (!_config.AutomatedResponse.Enabled)
                 return;
 
             try
             {
-                // ONLY respond if the bot is mentioned - this is the key requirement
                 if (message.MentionedUsers.Any(u => u.Id == _client.CurrentUser.Id))
                 {
                     _logger.LogInformation("Bot mentioned by {Username} in {ChannelName}: {MessageContent}",
@@ -147,7 +146,6 @@ namespace ValheimDiscordBot.Services
 
                     await HandleMentionAsync(message);
                 }
-                // If not mentioned, do nothing - bot stays silent
             }
             catch (Exception ex)
             {
@@ -157,10 +155,8 @@ namespace ValheimDiscordBot.Services
 
         private async Task HandleMentionAsync(SocketMessage message)
         {
-            // Extract command from message (remove mentions and extra whitespace)
             var cleanContent = message.Content;
 
-            // Remove bot mentions from the message
             foreach (var mention in message.MentionedUsers.Where(u => u.Id == _client.CurrentUser.Id))
             {
                 cleanContent = cleanContent.Replace($"<@{mention.Id}>", "").Replace($"<@!{mention.Id}>", "");
@@ -168,37 +164,30 @@ namespace ValheimDiscordBot.Services
 
             cleanContent = cleanContent.Trim().ToLowerInvariant();
 
-            // Determine response based on command
             string response;
 
             if (string.IsNullOrEmpty(cleanContent))
             {
-                // Just mentioned with no command - show default message
                 response = _config.AutomatedResponse.DefaultMessage;
             }
             else
             {
-                // Extract the command and only respond to configured commands
                 var command = ExtractConfiguredCommand(cleanContent);
 
                 if (command == "status")
                 {
-                    // Use the always online status
-                    response = GetAlwaysOnlineStatus();
+                    response = await GetRealServerStatusAsync();
                 }
                 else if (!string.IsNullOrEmpty(command) && _config.AutomatedResponse.CommandResponses.TryGetValue(command, out var commandResponse))
                 {
-                    // Use the configured response for this command
                     response = commandResponse;
                 }
                 else
                 {
-                    // Unknown command - show help message
                     response = $"❓ Unknown command. Try one of these:\n\n{_config.AutomatedResponse.CommandResponses.GetValueOrDefault("help", _config.AutomatedResponse.DefaultMessage)}";
                 }
             }
 
-            // Send the response to the same channel where the bot was mentioned
             await SendMessageToChannelAsync(message.Channel, response);
         }
 
@@ -207,18 +196,14 @@ namespace ValheimDiscordBot.Services
             if (string.IsNullOrWhiteSpace(content))
                 return null;
 
-            // Get all configured commands from the settings
             var configuredCommands = _config.AutomatedResponse.CommandResponses.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            // Also add "status" since it has special handling
             configuredCommands.Add("status");
 
-            // Split the content into words
             var words = content.Split(new[] { ' ', '\t', '\n' }, StringSplitOptions.RemoveEmptyEntries)
                               .Where(w => !string.IsNullOrWhiteSpace(w))
                               .ToList();
 
-            // Look for the first word that matches a configured command
             foreach (var word in words)
             {
                 if (configuredCommands.Contains(word))
@@ -227,40 +212,38 @@ namespace ValheimDiscordBot.Services
                 }
             }
 
-            // No configured command found
             return null;
         }
 
-        private string GetAlwaysOnlineStatus()
-        {
-            var statusMessage = "🟢 **The Thatch Hut** - Online and Ready!\n\n" +
-                              "🌍 **World**: Midgard\n" +
-                              "👥 **Status**: Accepting brave Vikings!\n" +
-                              "🔒 **Password**: Golum2003\n" +
-                              "⚔️ **Mods**: ValheimPlus enabled\n" +
-                              "📡 **Connection**: Stable and reliable\n" +
-                              $"🕒 **Last Checked**: <t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:R>\n\n" +
-                              "Ready for your next adventure! 🏔️";
-
-            return statusMessage;
-        }
-
-        private async Task<bool> InitializeChannelAsync()
+        private async Task<string> GetRealServerStatusAsync()
         {
             try
             {
-                // First try to get channel by ID if provided
+                _logger.LogInformation("Checking real Valheim server status...");
+                var serverStatus = await _valheimServerService.CheckServerStatusAsync();
+                return _valheimServerService.FormatServerStatus(serverStatus);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting real server status, falling back to default");
+                return _config.AutomatedResponse.CommandResponses.GetValueOrDefault("status", "🔴 **Server Status Unknown** - Unable to check server status at this time.");
+            }
+        }
+
+        private Task<bool> InitializeChannelAsync()
+        {
+            try
+            {
                 if (_config.ChannelId.HasValue)
                 {
                     _targetChannel = _client.GetChannel(_config.ChannelId.Value) as IMessageChannel;
                     if (_targetChannel != null)
                     {
                         _logger.LogInformation("Found target channel by ID: {ChannelName}", _targetChannel.Name);
-                        return true;
+                        return Task.FromResult(true);
                     }
                 }
 
-                // If no specific channel ID, search by name in the guild
                 if (_config.GuildId.HasValue)
                 {
                     var guild = _client.GetGuild(_config.GuildId.Value);
@@ -273,12 +256,11 @@ namespace ValheimDiscordBot.Services
                         {
                             _logger.LogInformation("Found target channel by name: {ChannelName} in guild: {GuildName}",
                                 _targetChannel.Name, guild.Name);
-                            return true;
+                            return Task.FromResult(true);
                         }
                     }
                 }
 
-                // If still not found, search across all guilds
                 foreach (var guild in _client.Guilds)
                 {
                     _targetChannel = guild.TextChannels.FirstOrDefault(c =>
@@ -288,17 +270,17 @@ namespace ValheimDiscordBot.Services
                     {
                         _logger.LogInformation("Found target channel: {ChannelName} in guild: {GuildName}",
                             _targetChannel.Name, guild.Name);
-                        return true;
+                        return Task.FromResult(true);
                     }
                 }
 
                 _logger.LogError("Could not find target channel: {ChannelName}", _config.ChannelName);
-                return false;
+                return Task.FromResult(false);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error initializing Discord channel");
-                return false;
+                return Task.FromResult(false);
             }
         }
 

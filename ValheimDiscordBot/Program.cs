@@ -9,6 +9,9 @@ var discordConfig = new DiscordConfiguration();
 builder.Configuration.GetSection(DiscordConfiguration.SectionName).Bind(discordConfig);
 builder.Services.AddSingleton(discordConfig);
 
+// Register Valheim server service
+builder.Services.AddSingleton<ValheimServerService>();
+
 // Register Discord bot service
 builder.Services.AddSingleton<DiscordBotService>();
 
