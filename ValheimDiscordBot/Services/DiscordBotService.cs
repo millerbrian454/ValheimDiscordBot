@@ -1,5 +1,6 @@
 ﻿using Discord;
 using Discord.WebSocket;
+using ValheimDiscordBot.Configuration;
 
 namespace ValheimDiscordBot.Services
 {

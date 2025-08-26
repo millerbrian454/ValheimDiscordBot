@@ -1,4 +1,4 @@
-﻿namespace ValheimDiscordBot
+﻿namespace ValheimDiscordBot.Configuration
 {
     public class DiscordConfiguration
     {

@@ -1,4 +1,5 @@
 using ValheimDiscordBot;
+using ValheimDiscordBot.Configuration;
 using ValheimDiscordBot.Services;
 
 var builder = Host.CreateApplicationBuilder(args);

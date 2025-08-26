@@ -1,3 +1,4 @@
+using ValheimDiscordBot.Configuration;
 using ValheimDiscordBot.Services;
 
 namespace ValheimDiscordBot
